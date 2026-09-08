@@ -205,14 +205,16 @@ export class FactTableTab {
     const color = asrt.color || 'green';
 
     return `
-      <div style="padding: 4px 6px; border-radius: var(--radius-xs); border: 1px solid var(--border-subtle); background-color: var(--bg-surface); display: flex; align-items: center; justify-content: space-between; gap: 6px;">
-        <div style="display: flex; align-items: center; gap: 5px; flex: 1; overflow: hidden;">
-          <span style="width: 8px; height: 8px; border-radius: 50%; background-color: var(--asrt-${color}-pill); flex-shrink: 0;"></span>
-          <span style="font-weight: 600; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${this.escapeHtml(asrt.name)}</span>
-          <span style="font-size: 10px; color: var(--text-muted); flex-shrink: 0;">(עמ' ${this.escapeHtml(asrt.page)})</span>
+      <div class="cell-asrt-item">
+        <div class="cell-asrt-main">
+          <span class="cell-asrt-dot" style="background-color: var(--asrt-${color}-pill);"></span>
+          <div class="cell-asrt-text">
+            <span class="cell-asrt-name">${this.escapeHtml(asrt.name)}</span>
+            <span class="cell-asrt-page">(עמ' ${this.escapeHtml(asrt.page)})</span>
+          </div>
         </div>
 
-        <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+        <div class="cell-asrt-controls">
           <div class="cell-asrt-actions">
             <button class="cell-asrt-btn btn-cell-edit-asrt" data-asrt-id="${asrt.id}" title="ערוך טענה בחלון קופץ">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
