@@ -3,10 +3,12 @@
 // ==========================================================================
 
 import { store } from '../store.js';
+import { AssertionEditModal } from './AssertionEditModal.js';
 
 export class FactTableTab {
   constructor() {
     this.container = document.getElementById('table-container');
+    this.assertionEditModal = new AssertionEditModal();
     this.expandedFacts = new Set(); // track expanded fact IDs in cells
     this.render();
   }
@@ -211,6 +213,15 @@ export class FactTableTab {
         </div>
 
         <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+          <div class="cell-asrt-actions">
+            <button class="cell-asrt-btn btn-cell-edit-asrt" data-asrt-id="${asrt.id}" title="ערוך טענה בחלון קופץ">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button class="cell-asrt-btn jump btn-cell-jump-witness" data-asrt-id="${asrt.id}" title="עבור לעדות בלשונית עדים">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+
           <label class="status-checkbox-label proved ${item.proved ? 'checked' : ''}" style="font-size: 10px; padding: 1px 5px;" title="הוכח">
             <input type="checkbox" class="cell-asrt-status-chk" data-fact-id="${factId}" data-asrt-id="${asrt.id}" data-type="${type}" data-status="proved" ${item.proved ? 'checked' : ''}>
             <span>הוכח</span>
@@ -385,6 +396,24 @@ export class FactTableTab {
           store.setFactAssertionStatus(factId, aId, type, { disproved: checked, proved: checked ? false : undefined });
         }
         this.render();
+      });
+    });
+
+    // Quick edit assertion in pop-up modal from cell
+    this.container.querySelectorAll('.btn-cell-edit-asrt').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aId = btn.dataset.asrtId;
+        this.assertionEditModal.open(aId);
+      });
+    });
+
+    // Jump to witness tab with assertion open from cell
+    this.container.querySelectorAll('.btn-cell-jump-witness').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aId = btn.dataset.asrtId;
+        store.navigateToAssertion(aId);
       });
     });
   }

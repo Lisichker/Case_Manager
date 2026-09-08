@@ -23,13 +23,24 @@ function getInitialTab() {
   return 'table';
 }
 
+// Helper to get local persistent editor username
+function getInitialUsername() {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('case_manager_username');
+      if (stored && stored.trim()) return stored.trim();
+    } catch (e) {}
+  }
+  return 'עו״ד מגן';
+}
+
 // Initial Empty State
 function createDefaultState() {
   return {
     version: 1,
     lastUpdated: Date.now(),
     editor: {
-      username: 'עו״ד מגן',
+      username: getInitialUsername(),
       isLocked: false,
     },
     activeTab: getInitialTab(), // Tab-local: not synchronized across tabs
@@ -274,13 +285,33 @@ export function getSampleCaseData() {
   };
 }
 
+function getInitialTabLocks() {
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const stored = sessionStorage.getItem('case_manager_tab_locks');
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {}
+  }
+  return {
+    table: false,
+    facts: false,
+    witnesses: false
+  };
+}
+
 class CaseStore {
   constructor() {
     this.listeners = new Set();
     this.caseId = this.getCaseIdFromUrl();
     this.onlineUsers = [];
     this.wsConnected = false;
+    this.tabLocks = getInitialTabLocks();
+    this.targetAssertionHighlight = null;
     this.state = this.loadFromStorage() || getSampleCaseData();
+    this.state.editor.username = getInitialUsername();
+    this.state.editor.isLocked = this.isTabLocked(this.state.activeTab);
     this.initRealTimeSync();
     this.initWebSocket();
   }
@@ -303,26 +334,47 @@ class CaseStore {
     return this.caseId;
   }
 
+  getTabId() {
+    return TAB_ID;
+  }
+
   getOnlineUsers() {
-    return this.onlineUsers;
+    const list = [...this.onlineUsers];
+    const selfTabId = TAB_ID;
+    const selfName = this.state.editor.username || 'עו״ד';
+
+    // Ensure current local user is represented in the list
+    const selfIdx = list.findIndex(u => u.tabId === selfTabId);
+    if (selfIdx !== -1) {
+      list[selfIdx].username = selfName;
+      list[selfIdx].isSelf = true;
+    } else {
+      list.unshift({
+        username: selfName,
+        tabId: selfTabId,
+        isSelf: true
+      });
+    }
+
+    return list;
   }
 
   isWsConnected() {
     return this.wsConnected;
   }
 
-  // Extract only shared case domain data (no tab-local UI state)
+  // Extract only shared case domain data (no client-specific presence identity or lock state)
   getDomainData() {
     return {
       version: this.state.version || 1,
       lastUpdated: this.state.lastUpdated || Date.now(),
+      lastModifiedBy: this.state.editor?.username || 'עו״ד',
       witnesses: this.state.witnesses,
       statements: this.state.statements,
       assertions: this.state.assertions,
       factSheets: this.state.factSheets,
       facts: this.state.facts,
-      factTable: this.state.factTable,
-      editor: this.state.editor
+      factTable: this.state.factTable
     };
   }
 
@@ -344,7 +396,7 @@ class CaseStore {
             factSheets: parsed.factSheets || {},
             facts: parsed.facts || {},
             factTable: parsed.factTable || defaultState.factTable,
-            editor: { ...defaultState.editor, ...(parsed.editor || {}) },
+            editor: { ...defaultState.editor, username: getInitialUsername(), isLocked: false },
             lastUpdated: parsed.lastUpdated || Date.now(),
             // Tab-local UI state:
             activeTab: getInitialTab(),
@@ -421,9 +473,11 @@ class CaseStore {
     this.state.factSheets = data.factSheets || {};
     this.state.facts = data.facts || {};
     this.state.factTable = data.factTable || { columns: [], rows: [], cells: {} };
-    if (data.editor) {
-      this.state.editor = { ...this.state.editor, ...data.editor };
+    if (data.lastModifiedBy) {
+      this.state.lastModifiedBy = data.lastModifiedBy;
     }
+    // Maintain local editor identity and lock status
+    this.state.editor.isLocked = this.isTabLocked(this.state.activeTab);
     this.state.lastUpdated = data.lastUpdated || Date.now();
 
     // Ensure local selections remain valid without overwriting the user's selected tab or collapse state!
@@ -515,6 +569,19 @@ class CaseStore {
     }
   }
 
+  broadcastLocalPresence() {
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          type: 'USER_PRESENCE_ANNOUNCE',
+          sender: TAB_ID,
+          username: this.state.editor.username || 'עו״ד',
+          tabId: TAB_ID
+        });
+      } catch (e) {}
+    }
+  }
+
   // Initialize BroadcastChannel and Storage event listener for same-origin tabs
   initRealTimeSync() {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -526,8 +593,18 @@ class CaseStore {
 
           if ((msg.type === 'SYNC_DOMAIN_DATA' || msg.type === 'SYNC_STATE') && (msg.data || msg.state)) {
             this.applyIncomingData(msg.data || msg.state);
+          } else if (msg.type === 'USER_PRESENCE_ANNOUNCE' && msg.username && msg.tabId) {
+            const existing = this.onlineUsers.find(u => u.tabId === msg.tabId);
+            if (existing) {
+              existing.username = msg.username;
+            } else {
+              this.onlineUsers.push({ username: msg.username, tabId: msg.tabId });
+            }
+            this.notify({ presenceUpdate: true, users: this.onlineUsers });
           }
         };
+        // Announce local presence on connect
+        this.broadcastLocalPresence();
       } catch (e) {
         console.warn('BroadcastChannel error:', e);
       }
@@ -574,6 +651,7 @@ class CaseStore {
   // Set active tab (LOCAL to this browser tab only - does not broadcast!)
   setActiveTab(tabName) {
     this.state.activeTab = tabName;
+    this.state.editor.isLocked = this.isTabLocked(tabName);
     if (typeof sessionStorage !== 'undefined') {
       try {
         sessionStorage.setItem('case_manager_active_tab', tabName);
@@ -582,17 +660,48 @@ class CaseStore {
     this.notify({ localTabChange: true });
   }
 
-  // Set lock mode
-  setLocked(isLocked) {
-    this.state.editor.isLocked = !!isLocked;
-    this.persistAndBroadcast();
+  // Check if a specific tab (or active tab) is locked in this browser tab
+  isTabLocked(tabName) {
+    const tab = tabName || this.state.activeTab || 'table';
+    return !!this.tabLocks[tab];
   }
 
-  // Set editor username
+  // Set lock mode for a specific tab (LOCAL to this browser tab only - does not broadcast!)
+  setTabLocked(tabName, isLocked) {
+    const tab = tabName || this.state.activeTab || 'table';
+    this.tabLocks[tab] = !!isLocked;
+    if (typeof sessionStorage !== 'undefined') {
+      try {
+        sessionStorage.setItem('case_manager_tab_locks', JSON.stringify(this.tabLocks));
+      } catch (e) {}
+    }
+    this.state.editor.isLocked = this.isTabLocked(this.state.activeTab);
+    this.notify({ localTabChange: true, lockChange: true, tab });
+  }
+
+  // Set lock mode (operates on current active tab by default)
+  setLocked(isLocked, tabName) {
+    const tab = tabName || this.state.activeTab || 'table';
+    this.setTabLocked(tab, isLocked);
+  }
+
+  isLocked(tabName) {
+    return this.isTabLocked(tabName);
+  }
+
+  // Set editor username (Presence Identity: local & broadcasted via presence, not overwriting case domain data)
   setUsername(username) {
     if (!username || !username.trim()) return;
-    this.state.editor.username = username.trim();
-    this.persistAndBroadcast();
+    const clean = username.trim();
+    this.state.editor.username = clean;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem('case_manager_username', clean);
+      } catch (e) {}
+    }
+    this.sendPresence();
+    this.broadcastLocalPresence();
+    this.notify({ presenceUpdate: true, userChange: true });
   }
 
   // Reset to empty case
@@ -664,7 +773,7 @@ class CaseStore {
   }
 
   addWitness(name = 'עד חדש') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('witnesses')) return;
     const id = generateId('wit');
     this.state.witnesses[id] = {
       id,
@@ -678,13 +787,62 @@ class CaseStore {
   }
 
   renameWitness(witnessId, newName) {
-    if (this.state.editor.isLocked || !this.state.witnesses[witnessId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.witnesses[witnessId]) return;
     this.state.witnesses[witnessId].name = newName.trim() || 'עד ללא שם';
     this.persistAndBroadcast();
   }
 
+  updateWitnessAttributes(witnessId, attributes = {}) {
+    if (this.isTabLocked('witnesses') || !this.state.witnesses[witnessId]) return;
+    const current = this.state.witnesses[witnessId];
+    this.state.witnesses[witnessId] = {
+      ...current,
+      name: attributes.name !== undefined ? attributes.name.trim() || 'עד ללא שם' : current.name,
+      role: attributes.role !== undefined ? attributes.role : (current.role || ''),
+      notes: attributes.notes !== undefined ? attributes.notes : (current.notes || '')
+    };
+    this.persistAndBroadcast();
+  }
+
+  // Navigate to Witnesses tab with the target assertion selected and opened
+  navigateToAssertion(assertionId) {
+    const asrt = this.state.assertions[assertionId];
+    if (!asrt) return null;
+
+    const stmt = this.state.statements[asrt.statementId];
+    let witId = null;
+
+    if (stmt && stmt.witnessIds && stmt.witnessIds.length > 0) {
+      witId = stmt.witnessIds[0];
+    } else {
+      for (const w of Object.values(this.state.witnesses)) {
+        if (w.statementIds && w.statementIds.includes(asrt.statementId)) {
+          witId = w.id;
+          break;
+        }
+      }
+    }
+
+    if (witId) {
+      this.state.selectedWitnessId = witId;
+    }
+    this.state.selectedStatementId = asrt.statementId;
+    this.targetAssertionHighlight = assertionId;
+    this.setActiveTab('witnesses');
+
+    return assertionId;
+  }
+
+  getTargetAssertionHighlight() {
+    return this.targetAssertionHighlight;
+  }
+
+  clearTargetAssertionHighlight() {
+    this.targetAssertionHighlight = null;
+  }
+
   deleteWitness(witnessId) {
-    if (this.state.editor.isLocked || !this.state.witnesses[witnessId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.witnesses[witnessId]) return;
     const wit = this.state.witnesses[witnessId];
 
     // Remove its statements
@@ -709,7 +867,7 @@ class CaseStore {
   }
 
   addStatement(witnessId, name = 'הודעה חדשה') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('witnesses')) return;
     const sId = generateId('stmt');
     const today = new Date().toISOString().slice(0, 10);
     this.state.statements[sId] = {
@@ -733,7 +891,7 @@ class CaseStore {
   }
 
   updateStatementAttributes(statementId, attributes) {
-    if (this.state.editor.isLocked || !this.state.statements[statementId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.statements[statementId]) return;
     const current = this.state.statements[statementId];
     this.state.statements[statementId] = {
       ...current,
@@ -760,7 +918,7 @@ class CaseStore {
   }
 
   deleteStatement(statementId, persist = true) {
-    if (this.state.editor.isLocked || !this.state.statements[statementId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.statements[statementId]) return;
     const stmt = this.state.statements[statementId];
 
     // Remove assertions
@@ -787,7 +945,7 @@ class CaseStore {
   }
 
   addAssertion(statementId, assertionData = {}) {
-    if (this.state.editor.isLocked || !this.state.statements[statementId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.statements[statementId]) return;
     const stmt = this.state.statements[statementId];
     const aId = generateId('asrt');
     const order = stmt.assertionIds ? stmt.assertionIds.length : 0;
@@ -811,7 +969,7 @@ class CaseStore {
   }
 
   updateAssertion(assertionId, updates) {
-    if (this.state.editor.isLocked || !this.state.assertions[assertionId]) return;
+    if (this.isTabLocked(this.state.activeTab) || !this.state.assertions[assertionId]) return;
     this.state.assertions[assertionId] = {
       ...this.state.assertions[assertionId],
       ...updates
@@ -820,7 +978,7 @@ class CaseStore {
   }
 
   moveAssertion(statementId, assertionId, direction) {
-    if (this.state.editor.isLocked || !this.state.statements[statementId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.statements[statementId]) return;
     const stmt = this.state.statements[statementId];
     const idx = stmt.assertionIds.indexOf(assertionId);
     if (idx === -1) return;
@@ -846,7 +1004,7 @@ class CaseStore {
   }
 
   deleteAssertion(assertionId) {
-    if (this.state.editor.isLocked || !this.state.assertions[assertionId]) return;
+    if (this.isTabLocked('witnesses') || !this.state.assertions[assertionId]) return;
     const asrt = this.state.assertions[assertionId];
     const stmt = this.state.statements[asrt.statementId];
     if (stmt && stmt.assertionIds) {
@@ -878,7 +1036,7 @@ class CaseStore {
   }
 
   addFactSheet(name = 'גיליון עובדות חדש') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('facts')) return;
     const id = generateId('sheet');
     this.state.factSheets[id] = {
       id,
@@ -891,13 +1049,24 @@ class CaseStore {
   }
 
   renameFactSheet(sheetId, newName) {
-    if (this.state.editor.isLocked || !this.state.factSheets[sheetId]) return;
+    if (this.isTabLocked('facts') || !this.state.factSheets[sheetId]) return;
     this.state.factSheets[sheetId].name = newName.trim() || 'גיליון עובדות';
     this.persistAndBroadcast();
   }
 
+  updateFactSheetAttributes(sheetId, attributes = {}) {
+    if (this.isTabLocked('facts') || !this.state.factSheets[sheetId]) return;
+    const current = this.state.factSheets[sheetId];
+    this.state.factSheets[sheetId] = {
+      ...current,
+      name: attributes.name !== undefined ? attributes.name.trim() || 'גיליון עובדות' : current.name,
+      description: attributes.description !== undefined ? attributes.description : (current.description || '')
+    };
+    this.persistAndBroadcast();
+  }
+
   deleteFactSheet(sheetId) {
-    if (this.state.editor.isLocked || !this.state.factSheets[sheetId]) return;
+    if (this.isTabLocked('facts') || !this.state.factSheets[sheetId]) return;
     delete this.state.factSheets[sheetId];
 
     // Remove sheetId references from facts
@@ -915,7 +1084,7 @@ class CaseStore {
   }
 
   addFact(sheetId, factName = 'עובדה חדשה') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('facts')) return;
     const factId = generateId('fact');
     this.state.facts[factId] = {
       id: factId,
@@ -936,13 +1105,13 @@ class CaseStore {
   }
 
   renameFact(factId, newName) {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked('facts') || !this.state.facts[factId]) return;
     this.state.facts[factId].name = newName.trim() || 'עובדה ללא שם';
     this.persistAndBroadcast();
   }
 
   setFactStatus(factId, { proved, disproved }) {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked(this.state.activeTab) || !this.state.facts[factId]) return;
     const fact = this.state.facts[factId];
     if (proved !== undefined) fact.proved = !!proved;
     if (disproved !== undefined) fact.disproved = !!disproved;
@@ -952,7 +1121,7 @@ class CaseStore {
   }
 
   linkFactToSheet(sheetId, factId) {
-    if (this.state.editor.isLocked || !this.state.factSheets[sheetId] || !this.state.facts[factId]) return;
+    if (this.isTabLocked('facts') || !this.state.factSheets[sheetId] || !this.state.facts[factId]) return;
     const sheet = this.state.factSheets[sheetId];
     const fact = this.state.facts[factId];
 
@@ -963,7 +1132,7 @@ class CaseStore {
   }
 
   unlinkFactFromSheet(sheetId, factId) {
-    if (this.state.editor.isLocked || !this.state.factSheets[sheetId] || !this.state.facts[factId]) return;
+    if (this.isTabLocked('facts') || !this.state.factSheets[sheetId] || !this.state.facts[factId]) return;
     const sheet = this.state.factSheets[sheetId];
     const fact = this.state.facts[factId];
 
@@ -974,7 +1143,7 @@ class CaseStore {
   }
 
   deleteFact(factId) {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked('facts') || !this.state.facts[factId]) return;
     // Remove from all sheets
     for (const sheet of Object.values(this.state.factSheets)) {
       sheet.factIds = sheet.factIds.filter(id => id !== factId);
@@ -988,7 +1157,7 @@ class CaseStore {
   }
 
   addAssertionToFact(factId, assertionId, type = 'strengthening') {
-    if (this.state.editor.isLocked || !this.state.facts[factId] || !this.state.assertions[assertionId]) return;
+    if (this.isTabLocked('facts') || !this.state.facts[factId] || !this.state.assertions[assertionId]) return;
     const fact = this.state.facts[factId];
     const targetList = type === 'strengthening' ? fact.strengtheningAssertions : fact.denyingAssertions;
 
@@ -1005,7 +1174,7 @@ class CaseStore {
   }
 
   removeAssertionFromFact(factId, assertionId, type = 'strengthening') {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked('facts') || !this.state.facts[factId]) return;
     const fact = this.state.facts[factId];
     if (type === 'strengthening') {
       fact.strengtheningAssertions = fact.strengtheningAssertions.filter(item => item.assertionId !== assertionId);
@@ -1016,7 +1185,7 @@ class CaseStore {
   }
 
   setFactAssertionStatus(factId, assertionId, type, { proved, disproved }) {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked(this.state.activeTab) || !this.state.facts[factId]) return;
     const fact = this.state.facts[factId];
     const targetList = type === 'strengthening' ? fact.strengtheningAssertions : fact.denyingAssertions;
     const entry = targetList.find(item => item.assertionId === assertionId);
@@ -1032,7 +1201,7 @@ class CaseStore {
   // -------------------------------------------------------------
 
   addTableColumn(name = 'עמודה חדשה') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const colId = generateId('col');
     this.state.factTable.columns.push({ id: colId, name });
     this.persistAndBroadcast();
@@ -1040,7 +1209,7 @@ class CaseStore {
   }
 
   renameTableColumn(colId, newName) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const col = this.state.factTable.columns.find(c => c.id === colId);
     if (col) {
       col.name = newName.trim() || 'עמודה';
@@ -1049,7 +1218,7 @@ class CaseStore {
   }
 
   moveTableColumn(colId, direction) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const cols = this.state.factTable.columns;
     const idx = cols.findIndex(c => c.id === colId);
     if (idx === -1) return;
@@ -1067,7 +1236,7 @@ class CaseStore {
   }
 
   deleteTableColumn(colId) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     this.state.factTable.columns = this.state.factTable.columns.filter(c => c.id !== colId);
     // Clean cells
     for (const key of Object.keys(this.state.factTable.cells)) {
@@ -1079,7 +1248,7 @@ class CaseStore {
   }
 
   addTableRow(name = 'שורה חדשה') {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const rowId = generateId('row');
     this.state.factTable.rows.push({ id: rowId, name });
     this.persistAndBroadcast();
@@ -1087,7 +1256,7 @@ class CaseStore {
   }
 
   renameTableRow(rowId, newName) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const row = this.state.factTable.rows.find(r => r.id === rowId);
     if (row) {
       row.name = newName.trim() || 'שורה';
@@ -1096,7 +1265,7 @@ class CaseStore {
   }
 
   moveTableRow(rowId, direction) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const rows = this.state.factTable.rows;
     const idx = rows.findIndex(r => r.id === rowId);
     if (idx === -1) return;
@@ -1114,7 +1283,7 @@ class CaseStore {
   }
 
   deleteTableRow(rowId) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     this.state.factTable.rows = this.state.factTable.rows.filter(r => r.id !== rowId);
     // Clean cells
     for (const key of Object.keys(this.state.factTable.cells)) {
@@ -1126,7 +1295,7 @@ class CaseStore {
   }
 
   addFactToCell(rowId, colId, factId) {
-    if (this.state.editor.isLocked || !this.state.facts[factId]) return;
+    if (this.isTabLocked('table') || !this.state.facts[factId]) return;
     const cellKey = `${rowId}_${colId}`;
     if (!this.state.factTable.cells[cellKey]) {
       this.state.factTable.cells[cellKey] = [];
@@ -1138,7 +1307,7 @@ class CaseStore {
   }
 
   removeFactFromCell(rowId, colId, factId) {
-    if (this.state.editor.isLocked) return;
+    if (this.isTabLocked('table')) return;
     const cellKey = `${rowId}_${colId}`;
     if (this.state.factTable.cells[cellKey]) {
       this.state.factTable.cells[cellKey] = this.state.factTable.cells[cellKey].filter(id => id !== factId);

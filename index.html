@@ -82,10 +82,32 @@
         </label>
       </div>
 
-      <!-- Active User Badge -->
-      <div class="user-badge" id="current-user-badge" title="עורך פעיל כעת">
-        <span class="user-avatar-circle" id="user-avatar">ע</span>
-        <span class="user-name" id="user-display-name">עו״ד</span>
+      <!-- Active User Badge Wrapper with Flowing Hover Popover -->
+      <div class="user-badge-wrapper" id="user-badge-wrapper">
+        <div class="user-badge" id="current-user-badge" title="עורך פעיל (העבר סמן לצפייה בכל העורכים, לחץ לעריכת שמך)">
+          <span class="user-avatar-circle" id="user-avatar">ע</span>
+          <span class="user-name" id="user-display-name">עו״ד</span>
+        </div>
+
+        <!-- Flowing Popover listing current editors (up to 5, otherwise scrollable) -->
+        <div class="editors-popover" id="editors-presence-popover">
+          <div class="editors-popover-header">
+            <div class="popover-header-title">
+              <span class="presence-pulse-dot"></span>
+              <span>עורכים מחוברים לתיק</span>
+            </div>
+            <span class="editors-popover-count" id="editors-popover-count">1</span>
+          </div>
+          <div class="editors-popover-list" id="editors-popover-list">
+            <!-- Dynamic editors list rendered by TopBar.js -->
+          </div>
+          <div class="editors-popover-footer">
+            <button type="button" class="btn-popover-rename" id="btn-popover-rename">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              <span>שנה את שמך</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Settings Dropdown Button -->

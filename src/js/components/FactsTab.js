@@ -4,11 +4,16 @@
 
 import { store } from '../store.js';
 import { AssertionPickerModal } from './AssertionPickerModal.js';
+import { AssertionEditModal } from './AssertionEditModal.js';
+import { FactSheetModal } from './FactSheetModal.js';
 
 export class FactsTab {
   constructor() {
     this.container = document.getElementById('facts-container');
     this.assertionPickerModal = new AssertionPickerModal();
+    this.assertionEditModal = new AssertionEditModal();
+    this.factSheetModal = new FactSheetModal();
+    this.collapsedFacts = new Set();
     this.render();
   }
 
@@ -52,7 +57,10 @@ export class FactsTab {
                   <span class="sheet-item-name" data-sheet-name-id="${sh.id}" title="לחיצה כפולה לעריכת שם">${this.escapeHtml(sh.name)}</span>
                   <span class="sheet-item-count" title="${factCount} עובדות בגיליון">${factCount}</span>
                 </div>
-                <div class="witness-item-actions">
+                <div class="sheet-item-actions witness-item-actions">
+                  <button class="mini-action-btn btn-edit-sheet" data-sheet-id="${sh.id}" title="ערוך פרטי גיליון עובדות">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
                   <button class="mini-action-btn danger btn-delete-sheet" data-sheet-id="${sh.id}" title="מחק גיליון עובדות">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
                   </button>
@@ -121,13 +129,17 @@ export class FactsTab {
           ` : facts.map(fact => {
             const strengthening = fact.strengtheningAssertions || [];
             const denying = fact.denyingAssertions || [];
+            const isFactCollapsed = this.collapsedFacts.has(fact.id);
 
             return `
-              <div class="fact-card" data-fact-id="${fact.id}">
+              <div class="fact-card ${isFactCollapsed ? 'collapsed' : ''}" data-fact-id="${fact.id}">
                 <!-- Fact Header: Name on top right, "proved" / "disproved" checkboxes on left -->
                 <div class="fact-card-header">
-                  <!-- Right: Name of the fact -->
+                  <!-- Right: Name of the fact + collapse toggle button -->
                   <div class="fact-header-right">
+                    <button class="btn-toggle-fact-collapse" data-fact-id="${fact.id}" title="${isFactCollapsed ? 'הרחב עובדה' : 'צמצם עובדה'}">
+                      <svg class="fact-collapse-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m18 15-6-6-6 6"/></svg>
+                    </button>
                     <input type="text" class="fact-name-input input-fact-name" data-fact-id="${fact.id}" value="${this.escapeHtml(fact.name || '')}" placeholder="שם העובדה...">
                   </div>
 
@@ -230,8 +242,17 @@ export class FactsTab {
           </div>
         </div>
 
-        <!-- On the left of every assertion: checkbox for "proved" or "disproved" + remove button -->
+        <!-- Left: Action buttons (edit modal + jump to witness) & status checkboxes -->
         <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <div class="fact-assertion-actions">
+            <button class="btn-quick-edit-asrt" data-asrt-id="${asrt.id}" title="ערוך טענה בחלון קופץ">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button class="btn-jump-to-witness" data-asrt-id="${asrt.id}" title="עבור לעדות בלשונית עדים">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+
           <label class="status-checkbox-label proved ${item.proved ? 'checked' : ''}" style="font-size: 11.5px; padding: 2px 7px;" title="סמן טענה זו כהוכחה">
             <input type="checkbox" class="asrt-in-fact-status-chk" data-fact-id="${factId}" data-asrt-id="${asrt.id}" data-type="${type}" data-status="proved" ${item.proved ? 'checked' : ''}>
             <span>הוכח</span>
@@ -262,7 +283,7 @@ export class FactsTab {
     // Select sheet
     this.container.querySelectorAll('.sheet-item').forEach(el => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('.witness-item-actions') || e.target.tagName === 'INPUT') return;
+        if (e.target.closest('.witness-item-actions') || e.target.closest('.sheet-item-actions') || e.target.tagName === 'INPUT') return;
         const sId = el.dataset.sheetId;
         store.selectFactSheet(sId);
         this.render();
@@ -273,7 +294,7 @@ export class FactsTab {
     this.container.querySelectorAll('[data-sheet-name-id]').forEach(el => {
       el.addEventListener('dblclick', (e) => {
         e.stopPropagation();
-        if (state.editor.isLocked) return;
+        if (store.isTabLocked('facts')) return;
         const sId = el.dataset.sheetNameId;
         const currentName = el.textContent || '';
         const input = document.createElement('input');
@@ -444,6 +465,47 @@ export class FactsTab {
         const type = btn.dataset.type;
         store.removeAssertionFromFact(factId, aId, type);
         this.render();
+      });
+    });
+
+    // Edit fact sheet modal
+    this.container.querySelectorAll('.btn-edit-sheet').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sId = btn.dataset.sheetId;
+        this.factSheetModal.open(sId);
+      });
+    });
+
+    // Toggle collapse fact card
+    this.container.querySelectorAll('.btn-toggle-fact-collapse').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const factId = btn.dataset.factId;
+        if (this.collapsedFacts.has(factId)) {
+          this.collapsedFacts.delete(factId);
+        } else {
+          this.collapsedFacts.add(factId);
+        }
+        this.render();
+      });
+    });
+
+    // Quick edit assertion in pop-up modal
+    this.container.querySelectorAll('.btn-quick-edit-asrt').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aId = btn.dataset.asrtId;
+        this.assertionEditModal.open(aId);
+      });
+    });
+
+    // Jump to witness tab with assertion open
+    this.container.querySelectorAll('.btn-jump-to-witness').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aId = btn.dataset.asrtId;
+        store.navigateToAssertion(aId);
       });
     });
   }

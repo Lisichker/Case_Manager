@@ -32,6 +32,10 @@ export class TopBar {
     this.syncIndicatorDot = document.getElementById('sync-indicator-dot');
     this.syncStatusLabel = document.getElementById('sync-status-label');
     this.userBadge = document.getElementById('current-user-badge');
+    this.editorsPopover = document.getElementById('editors-presence-popover');
+    this.editorsPopoverList = document.getElementById('editors-popover-list');
+    this.editorsPopoverCount = document.getElementById('editors-popover-count');
+    this.btnPopoverRename = document.getElementById('btn-popover-rename');
 
     this.initEvents();
     this.render();
@@ -53,14 +57,20 @@ export class TopBar {
       }
     });
 
-    // Quick rename on avatar / user badge click
-    this.userBadge?.addEventListener('click', () => {
+    // Quick rename on avatar / user badge click or popover rename button
+    const triggerRename = () => {
       const state = store.getState();
       const newName = prompt('שנה את שמך במערכת (יוצג לשאר העורכים בתיק):', state.editor.username);
       if (newName && newName.trim()) {
         store.setUsername(newName.trim());
         this.showToast(`שם העורך עודכן ל-${newName.trim()}`);
       }
+    };
+
+    this.userBadge?.addEventListener('click', triggerRename);
+    this.btnPopoverRename?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      triggerRename();
     });
 
     // Navigation tabs
@@ -68,9 +78,10 @@ export class TopBar {
     this.factsBtn?.addEventListener('click', () => store.setActiveTab('facts'));
     this.witnessesBtn?.addEventListener('click', () => store.setActiveTab('witnesses'));
 
-    // Lock toggle
+    // Lock toggle (toggles lock for currently active tab only)
     this.lockToggle?.addEventListener('change', (e) => {
-      store.setLocked(e.target.checked);
+      const activeTab = store.getState().activeTab || 'table';
+      store.setTabLocked(activeTab, e.target.checked);
     });
 
     // Settings dropdown toggle
@@ -188,13 +199,20 @@ export class TopBar {
     viewFacts?.classList.toggle('hidden', state.activeTab !== 'facts');
     viewWitnesses?.classList.toggle('hidden', state.activeTab !== 'witnesses');
 
-    // Lock mode
-    const isLocked = !!state.editor.isLocked;
-    if (this.lockToggle) this.lockToggle.checked = isLocked;
+    // Tab-specific lock states applied to each view section
+    viewTable?.classList.toggle('tab-locked', store.isTabLocked('table'));
+    viewFacts?.classList.toggle('tab-locked', store.isTabLocked('facts'));
+    viewWitnesses?.classList.toggle('tab-locked', store.isTabLocked('witnesses'));
+
+    // Remove legacy global body class so lock is strictly tab-specific
+    document.body.classList.remove('app-locked');
+
+    // Active tab's lock status controls the top bar switch
+    const isCurrentTabLocked = store.isTabLocked(state.activeTab);
+    if (this.lockToggle) this.lockToggle.checked = isCurrentTabLocked;
     if (this.lockStatusText) {
-      this.lockStatusText.textContent = isLocked ? 'נעול לעריכה' : 'פתוח לעריכה';
+      this.lockStatusText.textContent = isCurrentTabLocked ? 'נעול לעריכה' : 'פתוח לעריכה';
     }
-    document.body.classList.toggle('app-locked', isLocked);
 
     // Case room badge & link
     if (this.caseNameBadge) {
@@ -227,5 +245,38 @@ export class TopBar {
       const firstChar = (state.editor.username || 'ע').trim().charAt(0);
       this.userAvatar.textContent = firstChar;
     }
+
+    // Active Editors Flowing Popover List (up to 5, otherwise scrollable)
+    if (this.editorsPopoverList) {
+      const onlineUsers = store.getOnlineUsers ? store.getOnlineUsers() : [];
+      const selfTabId = store.getTabId ? store.getTabId() : '';
+
+      if (this.editorsPopoverCount) {
+        this.editorsPopoverCount.textContent = `${onlineUsers.length}`;
+      }
+
+      this.editorsPopoverList.innerHTML = onlineUsers.map(user => {
+        const isSelf = user.tabId === selfTabId || user.isSelf;
+        const initial = (user.username || 'ע').trim().charAt(0);
+        return `
+          <div class="editor-popover-item ${isSelf ? 'is-self' : ''}">
+            <div class="editor-item-left">
+              <span class="editor-item-avatar">${this.escapeHtml(initial)}</span>
+              <span class="editor-item-name" title="${this.escapeHtml(user.username)}">${this.escapeHtml(user.username)}</span>
+            </div>
+            ${isSelf ? '<span class="editor-self-tag">(אתה)</span>' : '<span class="editor-item-status-dot" title="מחובר כעת"></span>'}
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 }

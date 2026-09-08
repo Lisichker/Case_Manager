@@ -4,11 +4,13 @@
 
 import { store } from '../store.js';
 import { StatementModal } from './StatementModal.js';
+import { WitnessModal } from './WitnessModal.js';
 
 export class WitnessesTab {
   constructor() {
     this.container = document.getElementById('witnesses-container');
     this.statementModal = new StatementModal();
+    this.witnessModal = new WitnessModal();
     this.render();
   }
 
@@ -29,7 +31,7 @@ export class WitnessesTab {
       ? selectedStatement.assertionIds.map(aId => state.assertions[aId]).filter(Boolean)
       : [];
 
-    const isLocked = !!state.editor.isLocked;
+    const isLocked = store.isTabLocked ? store.isTabLocked('witnesses') : false;
     const isWitnessCollapsed = !!state.collapsed?.witnesses;
     const isStatementCollapsed = !!state.collapsed?.statements;
 
@@ -63,6 +65,9 @@ export class WitnessesTab {
                   <span class="witness-item-count" title="${stmtCount} הודעות">${stmtCount}</span>
                 </div>
                 <div class="witness-item-actions">
+                  <button class="mini-action-btn btn-edit-witness" data-witness-id="${w.id}" title="ערוך פרטי עד">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
                   <button class="mini-action-btn danger btn-delete-witness" data-witness-id="${w.id}" title="מחק עד">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                   </button>
@@ -241,6 +246,20 @@ export class WitnessesTab {
     `;
 
     this.attachEvents();
+
+    // Scroll and highlight target assertion if jumped to from Facts tab or Fact table
+    const targetAssertionId = store.getTargetAssertionHighlight ? store.getTargetAssertionHighlight() : null;
+    if (targetAssertionId) {
+      setTimeout(() => {
+        const el = this.container.querySelector(`.assertion-card[data-assertion-id="${targetAssertionId}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('highlight-pulse');
+          setTimeout(() => el.classList.remove('highlight-pulse'), 3500);
+        }
+        if (store.clearTargetAssertionHighlight) store.clearTargetAssertionHighlight();
+      }, 100);
+    }
   }
 
   attachEvents() {
@@ -271,7 +290,7 @@ export class WitnessesTab {
     this.container.querySelectorAll('[data-witness-name-id]').forEach(el => {
       el.addEventListener('dblclick', (e) => {
         e.stopPropagation();
-        if (state.editor.isLocked) return;
+        if (store.isTabLocked('witnesses')) return;
         const wId = el.dataset.witnessNameId;
         const currentName = el.textContent || '';
         const input = document.createElement('input');
@@ -310,6 +329,15 @@ export class WitnessesTab {
         store.selectWitness(id);
         this.render();
       }
+    });
+
+    // Edit witness modal button
+    this.container.querySelectorAll('.btn-edit-witness').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wId = btn.dataset.witnessId;
+        this.witnessModal.open(wId);
+      });
     });
 
     // Delete witness
