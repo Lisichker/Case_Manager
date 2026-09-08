@@ -7,7 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 5173;
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -32,9 +32,25 @@ const MIME_TYPES = {
 // HTTP Server for serving static assets
 const server = http.createServer((req, res) => {
   let reqPath = req.url.split('?')[0];
+
+  // Health check endpoint for Render zero-downtime deploys
+  if (reqPath === '/healthz' || reqPath === '/ping') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('OK');
+    return;
+  }
+
   if (reqPath === '/') reqPath = '/index.html';
 
   const safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, '');
+
+  // Block access to hidden dotfiles (e.g. .git, .env)
+  if (safePath.startsWith('.') || safePath.includes('/.')) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('403 Forbidden');
+    return;
+  }
+
   let filePath = path.join(__dirname, safePath);
 
   fs.stat(filePath, (err, stats) => {
